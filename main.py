@@ -19,6 +19,8 @@ warnings.filterwarnings("ignore")
 
 model = whisper.load_model("base")
 
+address = "0xc71a49cEbCF86f3283D0BC3193f62b9A3fAa216E"
+
 def transcribe(url):
     with open('.temp', 'wb') as f:
         f.write(requests.get(url).content)
@@ -35,6 +37,50 @@ def maybe_capture_screenshot(driver, label, enabled, output_dir):
     driver.save_screenshot(screenshot_path)
     print(f"Saved screenshot: {screenshot_path}")
     return screenshot_path
+
+def detect_recaptcha_block_reason(driver):
+    """
+    Returns a human-readable block reason when reCAPTCHA is in a blocked/rate-limited
+    state (e.g. "Try again later"), otherwise returns None.
+    """
+    driver.switch_to.default_content()
+
+    challenge_frames = driver.find_elements(By.XPATH, "//iframe[contains(@title, 'recaptcha challenge')]")
+    for frame in challenge_frames:
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(frame)
+
+            message_selectors = [
+                (By.CSS_SELECTOR, ".rc-doscaptcha-header-text"),
+                (By.CSS_SELECTOR, ".rc-doscaptcha-body-text"),
+                (By.CSS_SELECTOR, ".rc-audiochallenge-error-message"),
+            ]
+            message_parts = []
+            for by, selector in message_selectors:
+                for element in driver.find_elements(by, selector):
+                    text = element.text.strip()
+                    if text:
+                        message_parts.append(text)
+
+            if message_parts:
+                combined = " | ".join(dict.fromkeys(message_parts))
+                lowered = combined.lower()
+                blocked_markers = [
+                    "try again later",
+                    "automated queries",
+                    "can't process your request right now",
+                    "unusual traffic",
+                    "doscaptcha",
+                ]
+                if any(marker in lowered for marker in blocked_markers):
+                    return combined
+        except Exception:
+            continue
+        finally:
+            driver.switch_to.default_content()
+
+    return None
 
 def detect_captcha_provider(driver):
     driver.switch_to.default_content()
@@ -177,7 +223,7 @@ def enter_address(driver):
         raise TimeoutException("Address input field not found with known selectors")
 
     address_input.clear()
-    address_input.send_keys("0xa7D082d8C5952d2BCE4E8984f5B467429346d6F5")
+    address_input.send_keys(address)
 
 def start_mining(driver):
     wait = WebDriverWait(driver, 20)
@@ -274,12 +320,26 @@ if __name__ == "__main__":
             print("Running full flow")
             click_checkbox(driver)
             maybe_capture_screenshot(driver, "after_checkbox_click", screenshots_enabled, screenshots_dir)
+            block_reason = detect_recaptcha_block_reason(driver)
+            if block_reason:
+                print(f"Detected reCAPTCHA block: {block_reason}")
+                maybe_capture_screenshot(driver, "recaptcha_blocked_after_checkbox", screenshots_enabled, screenshots_dir)
+                raise SystemExit(0)
             time.sleep(1)
             request_audio_version(driver)
             maybe_capture_screenshot(driver, "after_audio_request", screenshots_enabled, screenshots_dir)
+            block_reason = detect_recaptcha_block_reason(driver)
+            if block_reason:
+                print(f"Detected reCAPTCHA block: {block_reason}")
+                maybe_capture_screenshot(driver, "recaptcha_blocked_after_audio_request", screenshots_enabled, screenshots_dir)
+                raise SystemExit(0)
             time.sleep(1)
             if not solve_audio_captcha(driver):
                 print("Stopping flow because audio captcha could not be solved.")
+                block_reason = detect_recaptcha_block_reason(driver)
+                if block_reason:
+                    print(f"Detected reCAPTCHA block: {block_reason}")
+                    maybe_capture_screenshot(driver, "recaptcha_blocked_during_audio", screenshots_enabled, screenshots_dir)
                 maybe_capture_screenshot(driver, "audio_captcha_failed", screenshots_enabled, screenshots_dir)
                 raise SystemExit(0)
             time.sleep(5)
