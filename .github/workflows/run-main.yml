@@ -37,5 +37,5 @@ jobs:
       - name: Run script
         env:
           CI: "true"
-          RUN_FULL_FLOW: "false"
+          RUN_FULL_FLOW: "true"
         run: python main.py
