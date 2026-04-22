@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - sepolia-pow
   pull_request:
 
 jobs:
