@@ -38,4 +38,14 @@ jobs:
         env:
           CI: "false"
           RUN_FULL_FLOW: "true"
+          CAPTURE_SCREENSHOTS: "true"
+          SCREENSHOT_DIR: "ci-screenshots"
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-headed-${{ github.run_id }}
+          path: ci-screenshots/
+          if-no-files-found: ignore

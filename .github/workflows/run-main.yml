@@ -38,4 +38,14 @@ jobs:
         env:
           CI: "true"
           RUN_FULL_FLOW: "true"
+          CAPTURE_SCREENSHOTS: "true"
+          SCREENSHOT_DIR: "ci-screenshots"
         run: python main.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-headless-${{ github.run_id }}
+          path: ci-screenshots/
+          if-no-files-found: ignore

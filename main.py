@@ -14,6 +14,7 @@ import requests
 import os
 import whisper
 import warnings
+from datetime import datetime
 warnings.filterwarnings("ignore")
 
 model = whisper.load_model("base")
@@ -23,6 +24,17 @@ def transcribe(url):
         f.write(requests.get(url).content)
     result = model.transcribe('.temp')
     return result["text"].strip()
+
+def maybe_capture_screenshot(driver, label, enabled, output_dir):
+    if not enabled:
+        return None
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
+    safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
+    screenshot_path = os.path.join(output_dir, f"{timestamp}_{safe_label}.png")
+    driver.save_screenshot(screenshot_path)
+    print(f"Saved screenshot: {screenshot_path}")
+    return screenshot_path
 
 def detect_captcha_provider(driver):
     driver.switch_to.default_content()
@@ -228,6 +240,8 @@ def claim_reward(driver):
 if __name__ == "__main__":
     is_ci = os.getenv("CI", "").lower() == "true"
     run_full_flow = os.getenv("RUN_FULL_FLOW", "false").lower() == "true"
+    screenshots_enabled = os.getenv("CAPTURE_SCREENSHOTS", "true" if is_ci else "false").lower() == "true"
+    screenshots_dir = os.getenv("SCREENSHOT_DIR", "ci-screenshots")
 
     chrome_options = Options()
     if is_ci:
@@ -243,28 +257,37 @@ if __name__ == "__main__":
   
     try:
         driver.get("https://sepolia-faucet.pk910.de/#/")
+        maybe_capture_screenshot(driver, "page_loaded", screenshots_enabled, screenshots_dir)
         captcha_provider = detect_captcha_provider(driver)
         print(f"Detected captcha provider: {captcha_provider}")
+        maybe_capture_screenshot(driver, f"captcha_{captcha_provider}", screenshots_enabled, screenshots_dir)
 
         if captcha_provider == "hcaptcha":
             print("Stopping flow because hCaptcha is not supported by this script.")
+            maybe_capture_screenshot(driver, "stopped_hcaptcha", screenshots_enabled, screenshots_dir)
             raise SystemExit(0)
 
         if is_ci and not run_full_flow:
             print("CI mode: skipping captcha/mining flow. Set RUN_FULL_FLOW=true to run full automation.")
+            maybe_capture_screenshot(driver, "ci_skipped_full_flow", screenshots_enabled, screenshots_dir)
         else:
             print("Running full flow")
             click_checkbox(driver)
+            maybe_capture_screenshot(driver, "after_checkbox_click", screenshots_enabled, screenshots_dir)
             time.sleep(1)
             request_audio_version(driver)
+            maybe_capture_screenshot(driver, "after_audio_request", screenshots_enabled, screenshots_dir)
             time.sleep(1)
             if not solve_audio_captcha(driver):
                 print("Stopping flow because audio captcha could not be solved.")
+                maybe_capture_screenshot(driver, "audio_captcha_failed", screenshots_enabled, screenshots_dir)
                 raise SystemExit(0)
             time.sleep(5)
             enter_address(driver)
+            maybe_capture_screenshot(driver, "after_enter_address", screenshots_enabled, screenshots_dir)
             time.sleep(1)
             start_mining(driver)
+            maybe_capture_screenshot(driver, "after_start_mining_click", screenshots_enabled, screenshots_dir)
 
             while True:
                 time.sleep(100)
@@ -274,5 +297,9 @@ if __name__ == "__main__":
                     break
 
             claim_reward(driver)
+            maybe_capture_screenshot(driver, "after_claim_reward", screenshots_enabled, screenshots_dir)
+    except Exception:
+        maybe_capture_screenshot(driver, "unhandled_exception", screenshots_enabled, screenshots_dir)
+        raise
     finally:
         driver.quit()
