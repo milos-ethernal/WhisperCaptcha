@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 
 model = whisper.load_model("base")
 
-address = "0xc71a49cEbCF86f3283D0BC3193f62b9A3fAa216E"
+address = "0x721a6a568e78588e8226e8AeEeBa77f8ce7Db62e"
 
 def transcribe(url):
     with open('.temp', 'wb') as f:
