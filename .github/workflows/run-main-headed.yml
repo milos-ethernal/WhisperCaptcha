@@ -42,7 +42,7 @@ jobs:
           SCREENSHOT_DIR: "ci-screenshots"
           BRIGHTDATA_USERNAME: ${{ secrets.BRIGHTDATA_USERNAME }}
           BRIGHTDATA_PASSWORD: ${{ secrets.BRIGHTDATA_PASSWORD }}
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" bash -c "export DISPLAY=:99 && python main.py"
 
       - name: Upload screenshots
         if: always()

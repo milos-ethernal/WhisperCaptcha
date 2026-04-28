@@ -127,12 +127,51 @@ def detect_captcha_provider(driver):
 def click_checkbox(driver):
     wait = WebDriverWait(driver, 10)
     driver.switch_to.default_content()
-    recaptcha_iframe = wait.until(
-        EC.presence_of_element_located((By.XPATH, "//iframe[@title='reCAPTCHA']"))
-    )
+
+    iframe_locators = [
+        (By.XPATH, "//iframe[@title='reCAPTCHA']"),
+        (By.XPATH, "//iframe[contains(@title, 'reCAPTCHA')]"),
+        (By.XPATH, "//iframe[contains(@src, 'recaptcha') and contains(@src, 'anchor')]"),
+        (By.CSS_SELECTOR, "iframe[src*='recaptcha'][src*='anchor']"),
+    ]
+
+    recaptcha_iframe = None
+    for locator in iframe_locators:
+        try:
+            recaptcha_iframe = wait.until(EC.presence_of_element_located(locator))
+            print(f"Found reCAPTCHA iframe with locator: {locator}")
+            break
+        except TimeoutException:
+            continue
+
+    if recaptcha_iframe is None:
+        # Dump iframes for debugging
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        for f in iframes:
+            print(f"  iframe title={f.get_attribute('title')!r} src={f.get_attribute('src')!r}")
+        raise TimeoutException("reCAPTCHA checkbox iframe not found with any known locator")
+
     driver.switch_to.frame(recaptcha_iframe)
-    wait.until(EC.element_to_be_clickable((By.ID, "recaptcha-anchor-label"))).click()
+
+    checkbox_locators = [
+        (By.ID, "recaptcha-anchor-label"),
+        (By.ID, "recaptcha-anchor"),
+        (By.CSS_SELECTOR, ".recaptcha-checkbox"),
+        (By.CSS_SELECTOR, "#recaptcha-anchor"),
+    ]
+
+    for locator in checkbox_locators:
+        try:
+            checkbox = wait.until(EC.element_to_be_clickable(locator))
+            checkbox.click()
+            print(f"Clicked checkbox with locator: {locator}")
+            driver.switch_to.default_content()
+            return
+        except TimeoutException:
+            continue
+
     driver.switch_to.default_content()
+    raise TimeoutException("reCAPTCHA checkbox element not found inside iframe")
 
 def click_at_page_coordinates(driver, x, y):
     driver.switch_to.default_content()
@@ -347,23 +386,24 @@ if __name__ == "__main__":
             "background": {"scripts": ["background.js"]},
             "minimum_chrome_version": "22.0.0"
         })
-        background = string.Template("""
-        var config = {
+
+        background = """
+        var config = {{
             mode: "fixed_servers",
-            rules: {
-                singleProxy: { scheme: "http", host: "$host", port: parseInt("$port") },
+            rules: {{
+                singleProxy: {{ scheme: "http", host: "{host}", port: parseInt("{port}") }},
                 bypassList: []
-            }
-        };
-        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+            }}
+        }};
+        chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
         chrome.webRequest.onAuthRequired.addListener(
-            function(details) {
-                return { authCredentials: { username: "$user", password: "$pass" } };
-            },
-            { urls: ["<all_urls>"] },
+            function(details) {{
+                return {{ authCredentials: {{ username: "{username}", password: "{password}" }} }};
+            }},
+            {{ urls: ["<all_urls>"] }},
             ["blocking"]
         );
-        """).substitute(host=host, port=port, user=username, password=password)
+        """.format(host=host, port=port, username=username, password=password)
 
         ext_path = ".proxy_auth_ext.zip"
         with zipfile.ZipFile(ext_path, "w") as zp:
@@ -372,11 +412,21 @@ if __name__ == "__main__":
         return ext_path
 
     chrome_options = Options()
+    
+    # Always add these regardless of CI flag - needed for Xvfb rendering
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("--disable-gpu")                    # ← critical for Xvfb
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--force-device-scale-factor=1")
+
+    # Xvfb needs this to know which display to paint to
+    chrome_options.add_argument("--display=:99")                    # ← match your Xvfb display
+
     if is_ci:
         chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1920,1080")
 
     # Bright Data proxy
     brightdata_host = "brd.superproxy.io"
