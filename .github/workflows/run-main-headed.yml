@@ -40,6 +40,8 @@ jobs:
           RUN_FULL_FLOW: "true"
           CAPTURE_SCREENSHOTS: "true"
           SCREENSHOT_DIR: "ci-screenshots"
+          BRIGHTDATA_USERNAME: ${{ secrets.BRIGHTDATA_USERNAME }}
+          BRIGHTDATA_PASSWORD: ${{ secrets.BRIGHTDATA_PASSWORD }}
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
 
       - name: Upload screenshots

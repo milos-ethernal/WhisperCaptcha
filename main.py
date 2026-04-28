@@ -14,6 +14,8 @@ import requests
 import os
 import whisper
 import warnings
+import zipfile
+import string
 from datetime import datetime
 warnings.filterwarnings("ignore")
 
@@ -169,6 +171,52 @@ def request_audio_version(driver):
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", audio_button)
 
+def has_audio_challenge(driver, timeout=10):
+    """
+    Returns True if the audio challenge button is present and clickable,
+    False if reCAPTCHA has suppressed it (bot detection, rate limiting, etc.)
+    """
+    wait = WebDriverWait(driver, timeout)
+    driver.switch_to.default_content()
+
+    challenge_frames = driver.find_elements(
+        By.XPATH, "//iframe[contains(@title, 'recaptcha challenge')]"
+    )
+    if not challenge_frames:
+        print("No challenge iframe found - captcha may not have opened yet.")
+        return False
+
+    try:
+        driver.switch_to.frame(challenge_frames[0])
+
+        # Check for hard block first
+        block_selectors = [
+            ".rc-doscaptcha-header-text",
+            ".rc-doscaptcha-body-text",
+        ]
+        for sel in block_selectors:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els and any(e.text.strip() for e in els):
+                print(f"reCAPTCHA hard block detected: {els[0].text.strip()}")
+                return False
+
+        # Check audio button exists and is visible
+        audio_buttons = driver.find_elements(By.ID, "recaptcha-audio-button")
+        if not audio_buttons:
+            print("Audio button not present in challenge iframe.")
+            return False
+
+        is_visible = audio_buttons[0].is_displayed()
+        is_enabled = audio_buttons[0].is_enabled()
+        print(f"Audio button found - visible: {is_visible}, enabled: {is_enabled}")
+        return is_visible and is_enabled
+
+    except Exception as e:
+        print(f"Error checking audio challenge availability: {e}")
+        return False
+    finally:
+        driver.switch_to.default_content()
+
 def solve_audio_captcha(driver):
     wait = WebDriverWait(driver, 20)
 
@@ -289,12 +337,64 @@ if __name__ == "__main__":
     screenshots_enabled = os.getenv("CAPTURE_SCREENSHOTS", "true" if is_ci else "false").lower() == "true"
     screenshots_dir = os.getenv("SCREENSHOT_DIR", "ci-screenshots")
 
+    def create_proxy_auth_extension(host, port, username, password):
+        manifest = json.dumps({
+            "version": "1.0.0",
+            "manifest_version": 2,
+            "name": "Proxy Auth",
+            "permissions": ["proxy", "tabs", "unlimitedStorage", "storage",
+                            "<all_urls>", "webRequest", "webRequestBlocking"],
+            "background": {"scripts": ["background.js"]},
+            "minimum_chrome_version": "22.0.0"
+        })
+        background = string.Template("""
+        var config = {
+            mode: "fixed_servers",
+            rules: {
+                singleProxy: { scheme: "http", host: "$host", port: parseInt("$port") },
+                bypassList: []
+            }
+        };
+        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+        chrome.webRequest.onAuthRequired.addListener(
+            function(details) {
+                return { authCredentials: { username: "$user", password: "$pass" } };
+            },
+            { urls: ["<all_urls>"] },
+            ["blocking"]
+        );
+        """).substitute(host=host, port=port, user=username, password=password)
+
+        ext_path = ".proxy_auth_ext.zip"
+        with zipfile.ZipFile(ext_path, "w") as zp:
+            zp.writestr("manifest.json", manifest)
+            zp.writestr("background.js", background)
+        return ext_path
+
     chrome_options = Options()
     if is_ci:
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--window-size=1920,1080")
+
+    # Bright Data proxy
+    brightdata_host = "brd.superproxy.io"
+    brightdata_port = "33335"
+    brightdata_user = os.getenv("BRIGHTDATA_USERNAME", "")
+    brightdata_pass = os.getenv("BRIGHTDATA_PASSWORD", "")
+
+    chrome_options.add_argument(f"--proxy-server=http://{brightdata_host}:{brightdata_port}")
+    chrome_options.add_argument("--ignore-certificate-errors")
+
+    if brightdata_user and brightdata_pass:
+        ext = create_proxy_auth_extension(
+            brightdata_host,
+            brightdata_port,
+            brightdata_user,
+            brightdata_pass,
+        )
+        chrome_options.add_extension(ext)
 
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
@@ -326,6 +426,12 @@ if __name__ == "__main__":
                 maybe_capture_screenshot(driver, "recaptcha_blocked_after_checkbox", screenshots_enabled, screenshots_dir)
                 raise SystemExit(0)
             time.sleep(1)
+
+            if not has_audio_challenge(driver):
+                print("Audio challenge not available - stopping. Try a different IP or session.")
+                maybe_capture_screenshot(driver, "audio_not_available", screenshots_enabled, screenshots_dir)
+                raise SystemExit(0)
+
             request_audio_version(driver)
             maybe_capture_screenshot(driver, "after_audio_request", screenshots_enabled, screenshots_dir)
             block_reason = detect_recaptcha_block_reason(driver)
